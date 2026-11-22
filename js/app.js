@@ -1,4 +1,4 @@
-const APP_VERSION='1.2.0';
+const APP_VERSION='1.2.1';
 /* =========================================================
    MAKIETA – aplikacja do protokołów z pomiarów instalacji
    Dane trzymane lokalnie w przeglądarce (bez serwera).
