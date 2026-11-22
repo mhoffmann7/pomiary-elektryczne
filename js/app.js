@@ -1,4 +1,4 @@
-const APP_VERSION='1.0.0';
+const APP_VERSION='1.1.0';
 /* =========================================================
    MAKIETA – aplikacja do protokołów z pomiarów instalacji
    Dane trzymane lokalnie w przeglądarce (bez serwera).
@@ -186,14 +186,34 @@ const IZO_U = {
   '1000': {u:1000, min:1,   t:'1000 V', d:'obwody powyżej 500 V'}
 };
 function izoU(o,p){ p=p||P(); return IZO_U[o.izoU] || IZO_U[p.izoU] || IZO_U['500']; }
-function evIzo(o,p){
-  const c=izoU(o,p); const pairs=izoPairs(o); let n=0, bad=[];
-  pairs.forEach(k=>{ const v=(o.izo||{})[k]; if(filled(v)){ n++; if(num(v)<c.min) bad.push(k);} });
+function evIzoVals(pairs, vals, c){
+  let n=0, bad=[];
+  pairs.forEach(k=>{ const v=(vals||{})[k]; if(filled(v)){ n++; if(num(v)<c.min) bad.push(k);} });
   const mt=fmt(c.min,c.min<1?1:0)+' MΩ';
   if(n===0) return {s:'none',t:'brak'};
   if(bad.length) return {s:'bad',t:'< '+mt+': '+bad.join(', ')};
   if(n<pairs.length) return {s:'warn',t:n+'/'+pairs.length};
   return {s:'ok',t:'≥ '+mt};
+}
+function evIzoRaw(o,p){ return evIzoVals(izoPairs(o), o.izo, izoU(o,p)); }
+/* --- pomiary grupowe (od strony zasilania, PN-HD 60364-6 pkt 6.4.3.3 i D.6.4.3.3) --- */
+function izoGroups(p){ p=p||P(); p.izoGr=p.izoGr||[]; return p.izoGr; }
+function izoGroupOf(o,p){ return izoGroups(p).find(g=>(g.obwody||[]).includes(o.id)); }
+function gFaz(g,p){ p=p||P(); return (g.obwody||[]).some(id=>{ const o=p.obwody.find(x=>x.id===id); return o&&(o.typ==='3f'||o.typ==='wlz'); }) ? '3f' : '1f'; }
+function izoPairsG(g,p){ const f=gFaz(g,p); return g.met==='zw' ? [f==='3f'?'L1+L2+L3+N–PE':'L+N–PE'] : TYPY[f].pairs; }
+function evIzoG(g,p){ return evIzoVals(izoPairsG(g,p), g.izo, izoU(g,p)); }
+function evIzo(o,p){
+  p=p||P(); const own=evIzoRaw(o,p);
+  if(own.s!=='none') return own;
+  const g=izoGroupOf(o,p); if(!g) return own;
+  const ge=evIzoG(g,p);
+  if(ge.s==='ok') return {s:'ok', t:'pomiar grupowy „'+g.nazwa+'”'};
+  if(ge.s==='bad') return {s:'warn', t:'grupa poniżej wymagań – zmierz osobno'};
+  return {s:'none', t:'w grupie „'+g.nazwa+'”'};
+}
+function izoDone(o,p){
+  if(izoPairs(o).every(k=>filled((o.izo||{})[k]))) return true;
+  const g=izoGroupOf(o,p); return !!(g && evIzoG(g,p).s==='ok' && evIzoRaw(o,p).s==='none');
 }
 function evZs(o){
   const zs=num(o.zs), ia=iaFor(o);
@@ -286,7 +306,7 @@ function stepStatus(id,p){
     case 'cig': { const wyr=p.wyr||[]; let m=wyr.filter(w=>!filled(w.r)).length + ((wyr.length||p.wyrNd)?0:1);
       if(cigTryb(p)==='all') m+=ob.filter(o=>!filled(o.cig)).length;
       return {done:m===0, missing:m, unit:'pomiarów'}; }
-    case 'izo': { const m=ob.filter(o=>izoPairs(o).some(k=>!filled((o.izo||{})[k]))).length; return {done:ob.length>0&&m===0, missing:m, unit:'obwodów'}; }
+    case 'izo': { const m=ob.filter(o=>!izoDone(o,p)).length + izoGroups(p).filter(g=>{ const e=evIzoG(g,p).s; return e==='none'||e==='warn'; }).length; return {done:ob.length>0&&m===0, missing:m, unit:'pomiarów'}; }
     case 'zs': { const m=ob.filter(o=>!filled(o.zs)).length; return {done:ob.length>0&&m===0, missing:m, unit:'obwodów'}; }
     case 'rcd': { const m=p.rcd.filter(r=>evRcd(r).s==='none'||evRcd(r).s==='warn').length; return {done:m===0, missing:m, unit:'wyłączników'}; }
     case 'uz': { if(p.uzNd) return {done:true,missing:0}; const m=p.uz.length?p.uz.filter(u=>!filled(u.r)).length:1; return {done:m===0, missing:m, unit:'pomiarów'}; }
@@ -401,6 +421,7 @@ function protActions(id){
 function copyProt(id){
   const src=S.protocols.find(x=>x.id===id); const c=JSON.parse(JSON.stringify(src)); const today=new Date().toISOString().slice(0,10);
   Object.assign(c,{id:uid(), nr:nextNumber(today), data:today, nastepne:addYear(today), created:Date.now(), step:'dane', skipped:[], uwagi:'', orzeczenie:'', photos:[], ogl:{}, rodzaj:'Okresowe', pogoda:'', wyk:wykSnap(wykDef())});
+  (c.izoGr||[]).forEach(g=>g.izo={});
   c.obwody.forEach(o=>{ o.izo={}; o.cig=''; o.zs=''; o.photos=[]; if(o.grz){ o.grz.etapy={}; o.grz.photos=[]; } });
   c.rcd.forEach(r=>['t1a','t1b','t5a','t5b','ia','iab','uc','half','test'].forEach(k=>delete r[k]));
   c.uz.forEach(u=>u.r=''); (c.wyr||[]).forEach(w=>w.r='');
@@ -584,7 +605,7 @@ function renderObwodForm(p){
 function backToWizard(){ view={name:'wizard'}; render(); }
 function dupOb(id){ const p=P(); const o=obById(id); const c=JSON.parse(JSON.stringify(o)); c.id=uid(); c.sym=o.sym+"'"; c.izo={}; c.cig=''; c.zs=''; c.photos=[]; if(c.grz) c.grz.etapy={}; p.obwody.splice(p.obwody.indexOf(o)+1,0,c); save(); editOb(c.id); toast('Zduplikowano obwód'); }
 function delOb(id){ confirmBox('Usunąć obwód wraz z wynikami?',`doDelOb('${id}')`); }
-function doDelOb(id){ const p=P(); p.obwody=p.obwody.filter(o=>o.id!==id); save(); backToWizard(); }
+function doDelOb(id){ const p=P(); p.obwody=p.obwody.filter(o=>o.id!==id); izoGroups(p).forEach(g=>g.obwody=(g.obwody||[]).filter(x=>x!==id)); save(); backToWizard(); }
 function addRcd(){ const p=P(); const r={id:uid(), sym:'Q'+(p.rcd.length+1), typ:'A', char:'G', In:'40', idn:'30'}; p.rcd.push(r); save(); editRcd(r.id); }
 function editRcd(id){ view={name:'rcdform', id}; render(); window.scrollTo(0,0); }
 function renderRcdForm(p){
@@ -673,14 +694,21 @@ function vIzo(p){
   const ord=[...p.obwody].sort((a,b)=>(a.typ==='wlz'?0:1)-(b.typ==='wlz'?0:1));
   const rows=ord.map(o=>{
     const pairs=izoPairs(o); const zw=o.izoMet==='zw';
-    return `<div class="card"><div class="row" style="margin-bottom:8px"><span class="sym">${esc(o.sym)}</span><span class="grow">${esc(o.nazwa)}<span class="small muted" style="display:block">${TYPY[o.typ].t}</span></span><span id="ev-izo-${o.id}">${badge(evIzo(o))}</span></div>
+    const g=izoGroupOf(o,p), own=evIzoRaw(o,p), gBad=g&&evIzoG(g,p).s==='bad';
+    const inner=`
      ${o.typ==='ogrz'?'<div class="warnbox">Odłącz regulator (elektronika). Izolację samego przewodu grzejnego (1000 V) wpisujesz w karcie w kroku „Ogrzewanie”.</div>':''}
      <label class="f" style="margin-bottom:8px"><span>Napięcie probiercze</span><select onchange="setOb('${o.id}','izoU',this.value);render()"><option value="" ${!o.izoU?'selected':''}>jak w protokole (${izoU({},p).t}, ≥ ${fmt(izoU({},p).min,izoU({},p).min<1?1:0)} MΩ)</option>${Object.entries(IZO_U).map(([k,c])=>`<option value="${k}" ${o.izoU===k?'selected':''}>${c.t} – ${c.d} (≥ ${fmt(c.min,c.min<1?1:0)} MΩ)</option>`).join('')}</select></label>
      <div class="seg" style="margin-bottom:8px"><button class="${!zw?'on':''}" onclick="setIzoMet('${o.id}','pary')">Każda para (${TYPY[o.typ].pairs.length})</button><button class="${zw?'on':''}" onclick="setIzoMet('${o.id}','zw')">${IZO_ZW[o.typ]}</button></div>
      <div class="meas${zw?' c2':''}">${pairs.map(k=>`<div class="cell"><label>${k} [MΩ]</label><input class="num" inputmode="decimal" value="${esc((o.izo||{})[k]||'')}" aria-label="${o.sym} ${k}" oninput="setOb('${o.id}','izo.${k}',this.value,'izo')"></div>`).join('')}</div>
-     <div class="btns" style="margin-top:8px"><button class="btn sm" onclick="izoAllMax('${o.id}')">Wszystkie „poza zakresem” (${esc(izoMax(p))})</button><button class="btn sm ghost" onclick="ocr('${o.id}','izo','MΩ')">${ico('cam')} Ze zdjęcia</button></div></div>`;
+     <div class="btns" style="margin-top:8px"><button class="btn sm" onclick="izoAllMax('${o.id}')">Wszystkie „poza zakresem” (${esc(izoMax(p))})</button><button class="btn sm ghost" onclick="ocr('${o.id}','izo','MΩ')">${ico('cam')} Ze zdjęcia</button></div>`;
+    const head=`<div class="row" style="margin-bottom:8px"><span class="sym">${esc(o.sym)}</span><span class="grow">${esc(o.nazwa)}<span class="small muted" style="display:block">${TYPY[o.typ].t}</span></span><span id="ev-izo-${o.id}">${badge(evIzo(o,p))}</span></div>`;
+    if(g) return `<div class="card">${head}
+      ${gBad?`<div class="warnbox">Wynik pomiaru grupowego „${esc(g.nazwa)}” poniżej wymagań – zmierz ten obwód osobno albo podziel grupę na mniejsze.</div>`:`<p class="small muted" style="margin:0 0 6px">Objęty pomiarem grupowym „${esc(g.nazwa)}” – pomiar osobny nie jest wymagany.</p>`}
+      <details${(gBad||own.s!=='none')?' open':''}><summary class="small" style="cursor:pointer;min-height:32px;color:var(--pri);font-weight:600">Zmierz osobno</summary><div style="margin-top:8px">${inner}</div></details></div>`;
+    return `<div class="card">${head}${inner}</div>`;
   }).join('');
-  return `<h2>Rezystancja izolacji</h2><p class="lead">Najpierw WLZ (kabel zasilający), potem obwody.</p>
+  const groups=izoGroups(p).map(g=>vIzoGroup(g,p)).join('');
+  return `<h2>Rezystancja izolacji</h2><p class="lead">Najpierw WLZ (kabel zasilający), potem obwody – osobno albo grupowo od strony zasilania.</p>
    <div class="card"><div class="small" style="margin-bottom:6px">Napięcie probiercze – domyślne dla protokołu</div>
    <div class="seg">${['250','500','1000'].map(k=>`<button class="${(p.izoU||'500')===k?'on':''}" onclick="setP('izoU','${k}');render()">${IZO_U[k].u} V</button>`).join('')}</div>
    <p class="small muted" style="margin:8px 0 0">${esc(izoU({},p).d)}; wymagane ≥ ${fmt(izoU({},p).min,0)} MΩ. Dla pojedynczego obwodu możesz ustawić inne napięcie (np. 250 V przy gniazdach z ogranicznikiem przepięć albo obwód SELV/PELV ≥ 0,5 MΩ).</p></div>
@@ -689,8 +717,42 @@ function vIzo(p){
    <input type="text" style="width:110px" value="${esc(izoMax(p))}" aria-label="Wynik poza zakresem" onchange="W(P()).izoMax=this.value.trim()||'>999';save();render()"></div>
    <div class="card"><div class="small" style="margin-bottom:6px">Metoda dla wszystkich obwodów naraz</div>
    <div class="btns"><button class="btn sm grow" onclick="setIzoMetAll('pary')">Każda para</button><button class="btn sm grow" onclick="setIzoMetAll('zw')">Przewody czynne zwarte – PE</button></div>
-   <p class="small muted" style="margin:8px 0 0">Pomiar między zwartymi przewodami czynnymi (L+N) a PE – np. przy pomiarach okresowych, gdy nie można odłączyć odbiorników (PN-HD 60364-6, 6.4.3.3).${p.rodzaj&&p.rodzaj!=='Okresowe'?' <b>Ten protokół nie jest okresowy</b> – przy odbiorczych mierzy się zwykle każdą parę.':''}</p></div>${rows}`;
+   <p class="small muted" style="margin:8px 0 0">Pomiar między zwartymi przewodami czynnymi (L+N) a PE – np. przy pomiarach okresowych, gdy nie można odłączyć odbiorników (PN-HD 60364-6, 6.4.3.3).${p.rodzaj&&p.rodzaj!=='Okresowe'?' <b>Ten protokół nie jest okresowy</b> – przy odbiorczych mierzy się zwykle każdą parę.':''}</p></div>
+   <div class="groupt">Pomiary grupowe – od strony zasilania</div>
+   <div class="info">Pomiar dla rozdzielnicy lub grupy obwodów z przyłączonymi wszystkimi obwodami odbiorczymi (odbiorniki odłączone, łączniki załączone). Gdy wynik grupy spełnia wymagania, spełnia je każdy obwód z osobna (PN-HD 60364-6, pkt 6.4.3.3 i D.6.4.3.3). Przy wyniku negatywnym podziel grupę lub zmierz obwody osobno.</div>
+   ${groups}<button class="btn block" style="margin-bottom:6px" onclick="addIzoGroup()">${ico('plus')} Pomiar grupowy</button>
+   <div class="groupt">Obwody</div>${rows}`;
 }
+function vIzoGroup(g,p){
+  const pairs=izoPairsG(g,p), zw=g.met==='zw', f=gFaz(g,p);
+  const rozdz=[...new Set(p.obwody.map(o=>o.rozdz||'Rozdzielnica'))];
+  const chips=p.obwody.map(o=>{ const on=(g.obwody||[]).includes(o.id); const other=!on && izoGroupOf(o,p);
+    return `<button class="btn sm" style="${on?'background:var(--pri);color:#fff;border-color:var(--pri)':''}${other?';opacity:.45':''}" aria-pressed="${on}" onclick="toggleG('${g.id}','${o.id}')">${esc(o.sym)}</button>`; }).join('');
+  return `<div class="card" style="border:2px solid var(--pri-soft)">
+    <div class="row" style="margin-bottom:8px"><input type="text" class="grow" value="${esc(g.nazwa)}" aria-label="Nazwa pomiaru grupowego" oninput="setG('${g.id}','nazwa',this.value)"><span id="ev-izog-${g.id}">${badge(evIzoG(g,p))}</span></div>
+    <div class="small muted" style="margin-bottom:4px">Obejmuje obwody (${(g.obwody||[]).length}):</div>
+    <div class="btns" style="margin-bottom:6px">${chips}</div>
+    <div class="btns" style="margin-bottom:10px">${rozdz.map(r=>`<button class="btn ghost sm" onclick="gAllRozdz('${g.id}','${esc(r).replace(/'/g,"\\'")}')">Wszystkie: ${esc(r)}</button>`).join('')}</div>
+    <label class="f" style="margin-bottom:8px"><span>Napięcie probiercze</span><select onchange="setG('${g.id}','izoU',this.value);render()"><option value="" ${!g.izoU?'selected':''}>jak w protokole (${izoU({},p).t})</option>${Object.entries(IZO_U).map(([k,c])=>`<option value="${k}" ${g.izoU===k?'selected':''}>${c.t} – ${c.d} (≥ ${fmt(c.min,c.min<1?1:0)} MΩ)</option>`).join('')}</select></label>
+    <div class="seg" style="margin-bottom:8px"><button class="${!zw?'on':''}" onclick="setG('${g.id}','met','pary');render()">Każda para (${TYPY[f].pairs.length})</button><button class="${zw?'on':''}" onclick="setG('${g.id}','met','zw');render()">${f==='3f'?'L1+L2+L3+N–PE':'L+N–PE'}</button></div>
+    <div class="meas${zw?' c2':''}">${pairs.map(k=>`<div class="cell"><label>${k} [MΩ]</label><input class="num" inputmode="decimal" value="${esc((g.izo||{})[k]||'')}" aria-label="${esc(g.nazwa)} ${k}" oninput="setG('${g.id}','izo.${k}',this.value,true)"></div>`).join('')}</div>
+    <div class="btns" style="margin-top:8px"><button class="btn sm" onclick="gAllMax('${g.id}')">Wszystkie „poza zakresem” (${esc(izoMax(p))})</button><button class="btn sm ghost" onclick="ocrG('${g.id}')">${ico('cam')} Ze zdjęcia</button><button class="btn sm danger" onclick="confirmBox('Usunąć pomiar grupowy?','delG(\\'${g.id}\\')')">Usuń</button></div></div>`;
+}
+function gById(id){ return izoGroups().find(g=>g.id===id); }
+function addIzoGroup(){ const p=P(); const free=p.obwody.filter(o=>o.typ!=='wlz' && !izoGroupOf(o,p)); const r=(free[0]||{}).rozdz||'RG';
+  izoGroups(p).push({id:uid(), nazwa:r, obwody:free.filter(o=>(o.rozdz||'RG')===r).map(o=>o.id), met:'zw', izoU:'', izo:{}}); save(); render(); }
+function setG(id,path,v,live){ deepSet(gById(id),path,v); save(); refreshStepper();
+  if(live){ const p=P(), g=gById(id); const e=document.getElementById('ev-izog-'+id); if(e) e.innerHTML=badge(evIzoG(g,p)); (g.obwody||[]).forEach(oid=>{ const el=document.getElementById('ev-izo-'+oid); const o=obById(oid); if(el&&o) el.innerHTML=badge(evIzo(o,p)); }); } }
+function toggleG(id,oid){ const p=P(), g=gById(id); g.obwody=g.obwody||[];
+  if(g.obwody.includes(oid)) g.obwody=g.obwody.filter(x=>x!==oid);
+  else { izoGroups(p).forEach(x=>{ x.obwody=(x.obwody||[]).filter(y=>y!==oid); }); g.obwody.push(oid); }
+  save(); render(); }
+function gAllRozdz(id,r){ const p=P(), g=gById(id); const ids=p.obwody.filter(o=>(o.rozdz||'Rozdzielnica')===r && o.typ!=='wlz').map(o=>o.id);
+  izoGroups(p).forEach(x=>{ if(x!==g) x.obwody=(x.obwody||[]).filter(y=>!ids.includes(y)); });
+  g.obwody=[...new Set([...(g.obwody||[]),...ids])]; save(); render(); }
+function gAllMax(id){ const p=P(), g=gById(id); const mx=izoMax(p); g.izo=g.izo||{}; izoPairsG(g,p).forEach(k=>g.izo[k]=mx); save(); render(); }
+function ocrG(id){ ocrDialog('MΩ', v=>{ const p=P(), g=gById(id); g.izo=g.izo||{}; izoPairsG(g,p).forEach(k=>{ if(!filled(g.izo[k])) g.izo[k]=v; }); save(); render(); }); }
+function delG(id){ const p=P(); p.izoGr=izoGroups(p).filter(g=>g.id!==id); save(); render(); }
 function setIzoMet(id,m){ obById(id).izoMet=m; save(); render(); }
 function setIzoMetAll(m){ P().obwody.forEach(o=>o.izoMet=m); save(); render(); toast(m==='zw'?'Wszystkie obwody: przewody czynne zwarte – PE':'Wszystkie obwody: każda para osobno'); }
 function izoAllMax(id){ const o=obById(id); const mx=izoMax(P()); izoPairs(o).forEach(k=>{ o.izo=o.izo||{}; o.izo[k]=mx; }); save(); render(); }
@@ -794,11 +856,12 @@ function collectFindings(p){
   oglItems(p).forEach((it,i)=>{ const a=p.ogl[it.k]||{}; if(a.v==='nie') out.push(`Oględziny p. ${i+1}: ${it.q.replace(/\.$/,'')} – NIE SPEŁNIA${a.uwaga?': '+a.uwaga:''}.`); });
   p.obwody.forEach(o=>{
     if(filled(o.cig) && evCig(o,p).s==='bad') out.push(`${o.sym} ${o.nazwa}: ciągłość PE ${o.cig} Ω – ocena negatywna.`);
-    if(evIzo(o).s==='bad') out.push(`${o.sym} ${o.nazwa}: rezystancja izolacji ${evIzo(o).t}.`);
+    if(evIzoRaw(o,p).s==='bad') out.push(`${o.sym} ${o.nazwa}: rezystancja izolacji ${evIzoRaw(o,p).t}.`);
     if(evZs(o).s==='bad'){ const ia=iaFor(o); out.push(`${o.sym} ${o.nazwa}: Zs = ${o.zs} Ω > Za = ${fmt(U0/ia)} Ω – brak skutecznej ochrony przez samoczynne wyłączenie.`); }
     if(o.typ==='ogrz') ETAPY.forEach(([k,l])=>{ if(evEtap(o,k).s==='bad') out.push(`${o.sym} przewód grzejny (${l.toLowerCase()}): ${evEtap(o,k).t}.`); });
   });
   p.rcd.forEach(r=>{ if(evRcd(r).s==='bad') out.push(`RCD ${r.sym}: ${evRcd(r).t}.`); });
+  izoGroups(p).forEach(g=>{ if(evIzoG(g,p).s==='bad') out.push(`Pomiar grupowy izolacji „${g.nazwa}”: ${evIzoG(g,p).t}.`); });
   (p.wyr||[]).forEach(w=>{ if(!p.wyrNd && evWyr(w,p).s==='bad') out.push(`${w.nazwa}: ${evWyr(w,p).t}.`); });
   p.uz.forEach(u=>{ if(!p.uzNd && evUz(u).s==='bad') out.push(`${u.sym}: ${evUz(u).t}.`); });
   p.obwody.filter(o=>o.typ==='ogrz').forEach(o=>{ const r=p.rcd.find(x=>x.id===o.rcd); if(!r||num(r.idn)>30) out.push(`${o.sym}: obwód ogrzewania bez RCD ≤ 30 mA (wymaganie producenta).`); });

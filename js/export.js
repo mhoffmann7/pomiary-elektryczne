@@ -13,8 +13,9 @@ function protocolModel(p){
   const H=t=>B.push({t:'h', text:(++n)+'. '+t});
   const Pp=(text,o)=>B.push(Object.assign({t:'p', text}, o||{}));
   const T=(head,rows,o)=>B.push(Object.assign({t:'table', head, rows}, o||{}));
-  const t3=list=>T(['Lp.','Symbol','Nazwa','U [V]',...pairs3,'Ocena'], list.map((o,i)=>[String(i+1),o.sym,o.nazwa,String(izoU(o,p).u),
-      ...(o.izoMet==='zw'?[{text:IZO_ZW[o.typ]+': '+val((o.izo||{})[IZO_ZW[o.typ]]), colSpan:pairs3.length}]:pairs3.map(k=>val((o.izo||{})[k]))), ev(evIzo(o,p))]), {wide:true, nameCol:2});
+  const inGroup=o=>{ const g=izoGroupOf(o,p); return (g && evIzoRaw(o,p).s==='none') ? g : null; };
+  const t3=list=>T(['Lp.','Symbol','Nazwa','U [V]',...pairs3,'Ocena'], list.map((o,i)=>{ const g=inGroup(o); return [String(i+1),o.sym,o.nazwa,g?String(izoU(g,p).u):String(izoU(o,p).u),
+      ...(g?[{text:'pomiar grupowy: '+g.nazwa, colSpan:pairs3.length}]:o.izoMet==='zw'?[{text:IZO_ZW[o.typ]+': '+val((o.izo||{})[IZO_ZW[o.typ]]), colSpan:pairs3.length}]:pairs3.map(k=>val((o.izo||{})[k]))), ev(evIzo(o,p))]; }), {wide:true, nameCol:2});
 
   B.push({t:'title', text:'PROTOKÓŁ NR '+(p.nr||'…')});
   B.push({t:'sub', text:'z kontroli stanu technicznego i badań instalacji elektrycznej do 1 kV\nzgodnie z PN-HD 60364-6:2016 „Sprawdzanie”'});
@@ -44,9 +45,13 @@ function protocolModel(p){
   if(wlz.length) t3(wlz); else Pp('Nie dotyczy.');
 
   H('Badanie rezystancji izolacji obwodów');
+  const grs=izoGroups(p).filter(g=>(g.obwody||[]).length);
+  if(grs.length){ Pp('Pomiary grupowe od strony zasilania (wszystkie obwody odbiorcze przyłączone, odbiorniki odłączone; PN-HD 60364-6, pkt 6.4.3.3) [MΩ]:',{bold:true});
+    T(['Lp.','Pomiar grupowy','Obejmuje obwody','U [V]','Wyniki [MΩ]','Ocena'], grs.map((g,i)=>[String(i+1), g.nazwa, (g.obwody||[]).map(id=>(p.obwody.find(o=>o.id===id)||{}).sym).filter(Boolean).join(', '), String(izoU(g,p).u),
+      izoPairsG(g,p).map(k=>k+': '+val((g.izo||{})[k])).join('\n'), ev(evIzoG(g,p))]), {nameCol:1}); }
   if(ob1.length){ Pp('Obwody jednofazowe [MΩ]:',{bold:true});
-    T(['Lp.','Symbol','Nazwa','U [V]','L-PE','L-N','N-PE','Ocena'], ob1.map((o,i)=>[String(i+1),o.sym,o.nazwa,String(izoU(o,p).u),
-      ...(o.izoMet==='zw'?[{text:'L+N–PE: '+val((o.izo||{})['L+N–PE']),colSpan:3}]:['L-PE','L-N','N-PE'].map(k=>val((o.izo||{})[k]))), ev(evIzo(o,p))]), {nameCol:2}); }
+    T(['Lp.','Symbol','Nazwa','U [V]','L-PE','L-N','N-PE','Ocena'], ob1.map((o,i)=>{ const g=inGroup(o); return [String(i+1),o.sym,o.nazwa,g?String(izoU(g,p).u):String(izoU(o,p).u),
+      ...(g?[{text:'pomiar grupowy: '+g.nazwa, colSpan:3}]:o.izoMet==='zw'?[{text:'L+N–PE: '+val((o.izo||{})['L+N–PE']),colSpan:3}]:['L-PE','L-N','N-PE'].map(k=>val((o.izo||{})[k]))), ev(evIzo(o,p))]; }), {nameCol:2}); }
   if(p.obwody.some(o=>o.izoMet==='zw')) Pp('L+N–PE – pomiar między zwartymi przewodami czynnymi a przewodem ochronnym (PN-HD 60364-6, pkt 6.4.3.3).',{small:true});
   if(ob3.length){ Pp('Obwody trójfazowe [MΩ]:',{bold:true}); t3(ob3); }
   if(!ob1.length&&!ob3.length) Pp('Brak obwodów.');

@@ -1,6 +1,6 @@
 /* Service worker: aplikacja działa bez internetu.
    Przy każdej nowej wersji zmień CACHE (np. pomiary-v1.0.1). */
-const CACHE = 'pomiary-v1.0.0';
+const CACHE = 'pomiary-v1.1.0';
 const FILES = [
   './', 'index.html', 'manifest.webmanifest',
   'css/app.css', 'js/app.js', 'js/export.js',
