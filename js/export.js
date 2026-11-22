@@ -58,8 +58,12 @@ function protocolModel(p){
 
   H('Badanie impedancji pętli zwarcia');
   Pp('U₀ = 230 V; warunek Zs ≤ Za = U₀/Ia (PN-HD 60364-4-41).',{small:true});
-  T(['Lp.','Symbol','Nazwa','Typ','In [A]','Ia [A]','Zs [Ω]','Za [Ω]','Ik [A]','Ocena'], p.obwody.map((o,i)=>{ const ia=iaFor(o), z=num(o.zs);
-    return [String(i+1),o.sym,o.nazwa,(o.zab||{}).char||'',String((o.zab||{}).In||''),ia?fmt(ia,0):'–',val(o.zs),ia?fmt(U0/ia):'–',z?fmt(U0/z,0):'–',ev(evZs(o))]; }), {nameCol:2});
+  { let lp=0; const rowsZ=[];
+    p.obwody.forEach(o=>{ const ia=iaFor(o); const zab=[(o.zab||{}).char||'',String((o.zab||{}).In||''),ia?fmt(ia,0):'–'];
+      const row=(nazwa,zsRaw,e)=>{ const z=num(zsRaw); rowsZ.push([String(++lp),o.sym,nazwa,...zab,val(zsRaw),ia?fmt(U0/ia):'–',z?fmt(U0/z,0):'–',ev(e)]); };
+      if(pkts(o).length) pkts(o).forEach(x=>row(o.nazwa+' – '+x.nazwa, x.zs, evZsVal(o,x.zs)));
+      else row(o.nazwa, o.zs, evZs(o)); });
+    T(['Lp.','Symbol','Miejsce pomiaru','Typ','In [A]','Ia [A]','Zs [Ω]','Za [Ω]','Ik [A]','Ocena'], rowsZ, {nameCol:2}); }
 
   H('Badanie wyłączników różnicowoprądowych RCD');
   if(p.rcd.length){

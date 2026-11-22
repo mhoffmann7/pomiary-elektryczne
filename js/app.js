@@ -1,4 +1,4 @@
-const APP_VERSION='1.1.1';
+const APP_VERSION='1.2.0';
 /* =========================================================
    MAKIETA – aplikacja do protokołów z pomiarów instalacji
    Dane trzymane lokalnie w przeglądarce (bez serwera).
@@ -215,13 +215,30 @@ function izoDone(o,p){
   if(izoPairs(o).every(k=>filled((o.izo||{})[k]))) return true;
   const g=izoGroupOf(o,p); return !!(g && evIzoG(g,p).s==='ok' && evIzoRaw(o,p).s==='none');
 }
-function evZs(o){
-  const zs=num(o.zs), ia=iaFor(o);
+/* --- pętla zwarcia: punkty pomiarowe (gniazda, wypusty) powiązane z obwodem --- */
+function pkts(o){ return o.pkt||[]; }
+function evZsVal(o,zsRaw){
+  const zs=num(zsRaw), ia=iaFor(o);
   if(zs===null) return {s:'none',t:'brak'};
   if(!ia) return {s:'warn',t:'brak danych zabezp.'};
-  const za=U0/ia;
-  return zs<=za ? {s:'ok',t:'Zs ≤ Za'} : {s:'bad',t:'Zs > Za'};
+  return zs<=U0/ia ? {s:'ok',t:'Zs ≤ Za'} : {s:'bad',t:'Zs > Za'};
 }
+function zsMax(o){ // najwyższa zmierzona Zs w obwodzie (decyduje o ocenie)
+  if(!pkts(o).length) return num(o.zs);
+  const v=pkts(o).map(x=>num(x.zs)).filter(x=>x!==null); return v.length?Math.max(...v):null;
+}
+function evZs(o){
+  if(!pkts(o).length) return evZsVal(o,o.zs);
+  const ev=pkts(o).map(x=>evZsVal(o,x.zs));
+  const bad=pkts(o).filter((x,i)=>ev[i].s==='bad');
+  if(bad.length) return {s:'bad',t:'Zs > Za: '+bad.map(x=>x.nazwa).join(', ')};
+  if(ev.every(e=>e.s==='none')) return {s:'none',t:'brak'};
+  if(ev.some(e=>e.s==='warn')) return {s:'warn',t:'brak danych zabezp.'};
+  const n=ev.filter(e=>e.s==='ok').length;
+  if(n<ev.length) return {s:'warn',t:n+'/'+ev.length+' punktów'};
+  return {s:'ok',t:'Zs ≤ Za ('+n+' pkt)'};
+}
+function zsDone(o){ return pkts(o).length ? pkts(o).every(x=>filled(x.zs)) : filled(o.zs); }
 /* --- RCD: kryteria wg PN-EN 61008-1 / 61009-1 (AC, A) i PN-EN 62423 (F, B) --- */
 const RCD_WAVE = {AC:'sin', A:'puls', F:'puls', B:'dc', 'B+':'dc'};
 const WAVE_OK  = {AC:['sin'], A:['sin','puls'], F:['sin','puls'], B:['sin','puls','dc'], 'B+':['sin','puls','dc']};
@@ -307,7 +324,7 @@ function stepStatus(id,p){
       if(cigTryb(p)==='all') m+=ob.filter(o=>!filled(o.cig)).length;
       return {done:m===0, missing:m, unit:'pomiarów'}; }
     case 'izo': { const m=ob.filter(o=>!izoDone(o,p)).length + izoGroups(p).filter(g=>{ const e=evIzoG(g,p).s; return e==='none'||e==='warn'; }).length; return {done:ob.length>0&&m===0, missing:m, unit:'pomiarów'}; }
-    case 'zs': { const m=ob.filter(o=>!filled(o.zs)).length; return {done:ob.length>0&&m===0, missing:m, unit:'obwodów'}; }
+    case 'zs': { const m=ob.reduce((a,o)=>a+(pkts(o).length?pkts(o).filter(x=>!filled(x.zs)).length:(filled(o.zs)?0:1)),0); return {done:ob.length>0&&m===0, missing:m, unit:'pomiarów'}; }
     case 'rcd': { const m=p.rcd.filter(r=>evRcd(r).s==='none'||evRcd(r).s==='warn').length; return {done:m===0, missing:m, unit:'wyłączników'}; }
     case 'uz': { if(p.uzNd) return {done:true,missing:0}; const m=p.uz.length?p.uz.filter(u=>!filled(u.r)).length:1; return {done:m===0, missing:m, unit:'pomiarów'}; }
     case 'grz': { let m=0; ob.filter(o=>o.typ==='ogrz').forEach(o=>ETAPY.filter(e=>e[2]).forEach(([k])=>{ const e=((o.grz||{}).etapy||{})[k]||{}; if(!filled(e.r)||!filled(e.iso)) m++; })); return {done:m===0, missing:m, unit:'etapów pomiarów'}; }
@@ -422,7 +439,7 @@ function copyProt(id){
   const src=S.protocols.find(x=>x.id===id); const c=JSON.parse(JSON.stringify(src)); const today=new Date().toISOString().slice(0,10);
   Object.assign(c,{id:uid(), nr:nextNumber(today), data:today, nastepne:addYear(today), created:Date.now(), step:'dane', skipped:[], uwagi:'', orzeczenie:'', photos:[], ogl:{}, rodzaj:'Okresowe', pogoda:'', wyk:wykSnap(wykDef())});
   (c.izoGr||[]).forEach(g=>g.izo={});
-  c.obwody.forEach(o=>{ o.izo={}; o.cig=''; o.zs=''; o.photos=[]; if(o.grz){ o.grz.etapy={}; o.grz.photos=[]; } });
+  c.obwody.forEach(o=>{ o.izo={}; o.cig=''; o.zs=''; (o.pkt||[]).forEach(x=>x.zs=''); o.photos=[]; if(o.grz){ o.grz.etapy={}; o.grz.photos=[]; } });
   c.rcd.forEach(r=>['t1a','t1b','t5a','t5b','ia','iab','uc','half','test'].forEach(k=>delete r[k]));
   c.uz.forEach(u=>u.r=''); (c.wyr||[]).forEach(w=>w.r='');
   S.protocols.push(c); S.cur=c.id; save(); view={name:'wizard'}; render(); toast('Utworzono kopię protokołu');
@@ -527,7 +544,8 @@ function refreshEv(k,id){
   const o=obById(id), p=P(); const el=document.getElementById('ev-'+k+'-'+id); if(!el) return;
   if(k==='cig') el.innerHTML=badge(evCig(o,p));
   if(k==='izo') el.innerHTML=badge(evIzo(o));
-  if(k==='zs'){ el.innerHTML=badge(evZs(o)); const isc=document.getElementById('isc-'+id); if(isc){ const z=num(o.zs); isc.textContent= z? fmt(U0/z,0)+' A':'–'; } }
+  if(k==='zs'){ el.innerHTML=badge(evZs(o)); const isc=document.getElementById('isc-'+id); if(isc){ const z=num(o.zs); isc.textContent= z? fmt(U0/z,0)+' A':'–'; }
+    pkts(o).forEach(x=>{ const e=document.getElementById('ev-pkt-'+x.id); if(e) e.innerHTML=badge(evZsVal(o,x.zs)); const ik=document.getElementById('ik-pkt-'+x.id); if(ik){ const z=num(x.zs); ik.textContent=z?'Ik '+fmt(U0/z,0)+' A':''; } }); }
   if(k==='grz'){ ETAPY.forEach(([ek])=>{ const e2=document.getElementById('ev-grz-'+ek+'-'+id); if(e2) e2.innerHTML=badge(evEtap(o,ek)); }); const pn=document.getElementById('grzpar-'+id); if(pn) pn.innerHTML=grzParamsHtml(o); const dd=document.getElementById('grzdiff-'+id); if(dd) dd.innerHTML=grzDiffHtml(o); }
 }
 function measInput(val, oninput, label, ocrCb){
@@ -561,7 +579,7 @@ function vObwody(p){
       return `<button class="listitem" onclick="editOb('${o.id}')"><span class="sym">${esc(o.sym)}</span>
       <span class="grow"><span style="display:block;font-weight:500">${esc(o.nazwa||'(bez nazwy)')}</span>
       <span class="small muted">${TYPY[o.typ].t} · ${esc((o.zab||{}).char||'')}${esc((o.zab||{}).In||'')}${r?' · RCD '+esc(r.sym)+' '+esc(r.idn)+' mA':''}</span></span>
-      ${o.typ==='ogrz'?'<span class="badge b-warn">ogrzewanie</span>':''}${(o.photos||[]).length?`<span class="badge b-none">${ico('img')}${o.photos.length}</span>`:''}${ico('chev')}</button>`; }).join('')}</div>`).join('');
+      ${pkts(o).length?`<span class="badge b-none">${pkts(o).length} pkt</span>`:''}${o.typ==='ogrz'?'<span class="badge b-warn">ogrzewanie</span>':''}${(o.photos||[]).length?`<span class="badge b-none">${ico('img')}${o.photos.length}</span>`:''}${ico('chev')}</button>`; }).join('')}</div>`).join('');
   const rcds = p.rcd.map(r=>`<button class="listitem" onclick="editRcd('${r.id}')"><span class="sym">${esc(r.sym)}</span><span class="grow">Typ ${esc(r.typ)} · ${esc(r.In)} A · IΔn ${esc(r.idn)} mA
      <span class="small muted" style="display:block">${p.obwody.filter(o=>o.rcd===r.id).map(o=>o.sym).join(', ')||'brak przypisanych obwodów'}</span></span>${ico('chev')}</button>`).join('');
   return `<h2>Obwody i zabezpieczenia</h2><p class="lead">Lista obwodów wpisywana raz – każdy kolejny krok pokazuje ją ponownie, z polami właściwymi dla danego pomiaru.</p>
@@ -581,7 +599,7 @@ function copyRozdz(name){
 }
 function doCopyRozdz(){
   const name=window.__copyFrom; const nn=document.getElementById('newrozdz').value.trim(); closeModal(); if(!nn) return;
-  const p=P(); p.obwody.filter(o=>o.rozdz===name).forEach(o=>{ const c=JSON.parse(JSON.stringify(o)); c.id=uid(); c.rozdz=nn; c.izo={}; c.cig=''; c.zs=''; c.photos=[]; if(c.grz) c.grz.etapy={}; p.obwody.push(c); });
+  const p=P(); p.obwody.filter(o=>o.rozdz===name).forEach(o=>{ const c=JSON.parse(JSON.stringify(o)); c.id=uid(); c.rozdz=nn; c.izo={}; c.cig=''; c.zs=''; (c.pkt||[]).forEach(x=>x.zs=''); c.photos=[]; if(c.grz) c.grz.etapy={}; p.obwody.push(c); });
   save(); render(); toast('Skopiowano obwody do „'+nn+'”');
 }
 function renderObwodForm(p){
@@ -599,12 +617,15 @@ function renderObwodForm(p){
     <label class="f"><span>Opis (opcjonalnie)</span><textarea oninput="setOb('${o.id}','opis',this.value)">${esc(o.opis)}</textarea></label>
    </div>
    ${o.typ==='ogrz'?`<div class="info">Obwód ogrzewania przechodzi wszystkie standardowe pomiary (ciągłość PE, izolacja, pętla zwarcia, RCD). Dodatkowo w kroku <b>Ogrzewanie</b> wypełnisz kartę przewodu grzejnego wg instrukcji producenta.</div>`:''}
+   <div class="card"><h3>Gniazda i punkty pomiarowe</h3><p class="small muted" style="margin:0 0 8px">Miejsca pomiaru impedancji pętli zwarcia w tym obwodzie. Bez punktów – jeden pomiar dla obwodu.</p>
+    ${pkts(o).map(x=>`<div class="row" style="margin-bottom:6px"><input type="text" class="grow" value="${esc(x.nazwa)}" aria-label="Nazwa punktu" oninput="setPkt('${o.id}','${x.id}','nazwa',this.value)"><button class="iconbtn" style="color:var(--bad);width:40px" aria-label="Usuń punkt ${esc(x.nazwa)}" onclick="delPkt('${o.id}','${x.id}')">✕</button></div>`).join('')}
+    <div class="btns"><button class="btn sm" onclick="addPkt('${o.id}','Gniazdo')">${ico('plus')} Gniazdo</button><button class="btn sm" onclick="addPkt('${o.id}','Punkt')">${ico('plus')} Inny punkt</button><button class="btn sm ghost" onclick="addPktMany('${o.id}')">Kilka gniazd…</button></div></div>
    <div class="card"><h3>Zdjęcia obwodu</h3>${photosHtml(o.photos,`addPhotoOb('${o.id}')`)}</div>
    <div class="btns"><button class="btn grow" onclick="dupOb('${o.id}')">${ico('copy')} Duplikuj</button><button class="btn danger grow" onclick="delOb('${o.id}')">Usuń</button></div>
    <div style="height:10px"></div><button class="btn pri block" onclick="backToWizard()">Gotowe</button></main>`;
 }
 function backToWizard(){ view={name:'wizard'}; render(); }
-function dupOb(id){ const p=P(); const o=obById(id); const c=JSON.parse(JSON.stringify(o)); c.id=uid(); c.sym=o.sym+"'"; c.izo={}; c.cig=''; c.zs=''; c.photos=[]; if(c.grz) c.grz.etapy={}; p.obwody.splice(p.obwody.indexOf(o)+1,0,c); save(); editOb(c.id); toast('Zduplikowano obwód'); }
+function dupOb(id){ const p=P(); const o=obById(id); const c=JSON.parse(JSON.stringify(o)); c.id=uid(); c.sym=o.sym+"'"; c.izo={}; c.cig=''; c.zs=''; (c.pkt||[]).forEach(x=>x.zs=''); c.photos=[]; if(c.grz) c.grz.etapy={}; p.obwody.splice(p.obwody.indexOf(o)+1,0,c); save(); editOb(c.id); toast('Zduplikowano obwód'); }
 function delOb(id){ confirmBox('Usunąć obwód wraz z wynikami?',`doDelOb('${id}')`); }
 function doDelOb(id){ const p=P(); p.obwody=p.obwody.filter(o=>o.id!==id); izoGroups(p).forEach(g=>g.obwody=(g.obwody||[]).filter(x=>x!==id)); save(); backToWizard(); }
 function addRcd(){ const p=P(); const r={id:uid(), sym:'Q'+(p.rcd.length+1), typ:'A', char:'G', In:'40', idn:'30'}; p.rcd.push(r); save(); editRcd(r.id); }
@@ -760,14 +781,46 @@ function izoAllMax(id){ const o=obById(id); const mx=izoMax(P()); izoPairs(o).fo
 
 /* ---------------- krok: pętla zwarcia ---------------- */
 function vZs(p){
-  const rows=p.obwody.map(o=>{ const ia=iaFor(o); const za=ia?U0/ia:null; const z=num(o.zs);
+  const rows=p.obwody.map(o=>{ const ia=iaFor(o); const za=ia?U0/ia:null; const z=num(o.zs); const P_=pkts(o);
+    const pointRows=P_.map(x=>{ const zz=num(x.zs); return `<div class="card" style="background:#fafbfc;padding:10px;margin-bottom:8px">
+        <div class="row" style="margin-bottom:6px"><input type="text" class="grow" value="${esc(x.nazwa)}" aria-label="Nazwa punktu pomiarowego" oninput="setPkt('${o.id}','${x.id}','nazwa',this.value)"><span id="ev-pkt-${x.id}">${badge(evZsVal(o,x.zs))}</span></div>
+        <div class="row"><div class="grow">${measInput(x.zs,`setPkt('${o.id}','${x.id}','zs',this.value)`,o.sym+' '+x.nazwa+' Zs',`ocrPkt('${o.id}','${x.id}')`)}</div>
+        <span class="small muted" style="min-width:74px;text-align:right" id="ik-pkt-${x.id}">${zz?'Ik '+fmt(U0/zz,0)+' A':''}</span>
+        <button class="iconbtn" style="color:var(--bad);width:40px" aria-label="Usuń punkt ${esc(x.nazwa)}" onclick="delPkt('${o.id}','${x.id}')">✕</button></div></div>`; }).join('');
+    const single=`<div class="meas c2"><div class="cell"><label>Zs zmierzona [Ω]</label>${measInput(o.zs,`setOb('${o.id}','zs',this.value,'zs')`,o.sym+' Zs',`ocr('${o.id}','zs','Ω')`)}</div>
+       <div class="cell"><label>Ik = U₀/Zs</label><div style="min-height:44px;display:flex;align-items:center;font-weight:600" id="isc-${o.id}">${z?fmt(U0/z,0)+' A':'–'}</div></div></div>`;
+    const zm=zsMax(o);
     return `<div class="card"><div class="row" style="margin-bottom:8px"><span class="sym">${esc(o.sym)}</span><span class="grow">${esc(o.nazwa)}<span class="small muted" style="display:block">${esc((o.zab||{}).char)}${esc((o.zab||{}).In)} · Ia = ${ia?fmt(ia,0)+' A':'–'} · Za = ${za?fmt(za)+' Ω':'–'}</span></span><span id="ev-zs-${o.id}">${badge(evZs(o))}</span></div>
      ${o.typ==='ogrz'?'<div class="info">Pomiar L-PE w puszce regulatora (koniec obwodu), w trybie bez wyzwalania RCD.</div>':''}
-     <div class="meas c2"><div class="cell"><label>Zs zmierzona [Ω]</label>${measInput(o.zs,`setOb('${o.id}','zs',this.value,'zs')`,o.sym+' Zs',`ocr('${o.id}','zs','Ω')`)}</div>
-     <div class="cell"><label>Ik = U₀/Zs</label><div style="min-height:44px;display:flex;align-items:center;font-weight:600" id="isc-${o.id}">${z?fmt(U0/z,0)+' A':'–'}</div></div></div></div>`; }).join('');
-  return `<h2>Impedancja pętli zwarcia</h2><p class="lead">Skuteczność samoczynnego wyłączenia zasilania (PN-HD 60364-4-41).</p>
+     ${P_.length?`<div class="small muted" style="margin-bottom:6px">Punkty pomiarowe (${P_.length})${zm!==null?` · najwyższa Zs: <b>${fmt(zm)} Ω</b>`:''}</div>${pointRows}`:single}
+     <div class="btns" style="margin-top:8px"><button class="btn sm" onclick="addPkt('${o.id}','Gniazdo')">${ico('plus')} Gniazdo</button><button class="btn sm" onclick="addPkt('${o.id}','Punkt')">${ico('plus')} Inny punkt</button><button class="btn sm ghost" onclick="addPktMany('${o.id}')">Kilka gniazd…</button></div></div>`; }).join('');
+  return `<h2>Impedancja pętli zwarcia</h2><p class="lead">Skuteczność samoczynnego wyłączenia zasilania (PN-HD 60364-4-41). Mierz w gniazdach i punktach obwodu – o ocenie obwodu decyduje najwyższa zmierzona Zs.</p>
    <div class="info">U₀ = 230 V. Warunek: <b>Zs ≤ Za = U₀ / Ia</b>. Ia: B = 5×In, C = 10×In, D = 20×In (t ≤ 0,4 s); gG – tabela dla 5 s (wartości orientacyjne, do weryfikacji). Aplikacja liczy Za sama – bez ręcznych przeliczeń.</div>${rows}`;
 }
+function addPkt(oid,kind,silent){
+  const o=obById(oid); o.pkt=o.pkt||[];
+  if(!o.pkt.length && filled(o.zs)){ o.pkt.push({id:uid(), nazwa:'Pomiar obwodu', zs:o.zs}); o.zs=''; }
+  const n=o.pkt.filter(x=>x.nazwa.startsWith(kind)).length+1;
+  o.pkt.push({id:uid(), nazwa:kind+' '+n, zs:''});
+  save(); if(!silent) render();
+}
+function addPktMany(oid){
+  window.__pktOid=oid;
+  modal(`<h3>Dodaj kilka gniazd</h3><label class="f"><span>Liczba gniazd w obwodzie</span><input id="pktn" class="num" inputmode="numeric" value="4"></label>
+   <label class="f"><span>Pomieszczenie / opis (opcjonalnie)</span><input id="pktloc" type="text" placeholder="np. kuchnia"></label>
+   <div class="btns"><button class="btn grow" onclick="closeModal()">Anuluj</button><button class="btn pri grow" onclick="doAddPktMany()">Dodaj</button></div>`);
+}
+function doAddPktMany(){
+  const oid=window.__pktOid, n=Math.min(40,Math.max(1,parseInt(document.getElementById('pktn').value)||0)), loc=document.getElementById('pktloc').value.trim(); closeModal();
+  const o=obById(oid); o.pkt=o.pkt||[];
+  if(!o.pkt.length && filled(o.zs)){ o.pkt.push({id:uid(), nazwa:'Pomiar obwodu', zs:o.zs}); o.zs=''; }
+  const start=o.pkt.filter(x=>x.nazwa.startsWith('Gniazdo')).length;
+  for(let i=1;i<=n;i++) o.pkt.push({id:uid(), nazwa:'Gniazdo '+(start+i)+(loc?' – '+loc:''), zs:''});
+  save(); render(); toast('Dodano '+n+' gniazd');
+}
+function setPkt(oid,pid,k,v){ const o=obById(oid); const x=pkts(o).find(y=>y.id===pid); if(!x) return; x[k]=v; save(); refreshStepper(); if(k==='zs') refreshEv('zs',oid); }
+function delPkt(oid,pid){ const o=obById(oid); o.pkt=pkts(o).filter(y=>y.id!==pid); save(); render(); }
+function ocrPkt(oid,pid){ ocrDialog('Ω', v=>{ setPkt(oid,pid,'zs',v); render(); }); }
 
 /* ---------------- krok: RCD ---------------- */
 function vRcd(p){
@@ -858,7 +911,9 @@ function collectFindings(p){
   p.obwody.forEach(o=>{
     if(filled(o.cig) && evCig(o,p).s==='bad') out.push(`${o.sym} ${o.nazwa}: ciągłość PE ${o.cig} Ω – ocena negatywna.`);
     if(evIzoRaw(o,p).s==='bad') out.push(`${o.sym} ${o.nazwa}: rezystancja izolacji ${evIzoRaw(o,p).t}.`);
-    if(evZs(o).s==='bad'){ const ia=iaFor(o); out.push(`${o.sym} ${o.nazwa}: Zs = ${o.zs} Ω > Za = ${fmt(U0/ia)} Ω – brak skutecznej ochrony przez samoczynne wyłączenie.`); }
+    if(evZs(o).s==='bad'){ const ia=iaFor(o);
+      if(pkts(o).length) pkts(o).filter(x=>evZsVal(o,x.zs).s==='bad').forEach(x=>out.push(`${o.sym} ${o.nazwa} – ${x.nazwa}: Zs = ${x.zs} Ω > Za = ${fmt(U0/ia)} Ω – brak skutecznej ochrony przez samoczynne wyłączenie.`));
+      else out.push(`${o.sym} ${o.nazwa}: Zs = ${o.zs} Ω > Za = ${fmt(U0/ia)} Ω – brak skutecznej ochrony przez samoczynne wyłączenie.`); }
     if(o.typ==='ogrz') ETAPY.forEach(([k,l])=>{ if(evEtap(o,k).s==='bad') out.push(`${o.sym} przewód grzejny (${l.toLowerCase()}): ${evEtap(o,k).t}.`); });
   });
   p.rcd.forEach(r=>{ if(evRcd(r).s==='bad') out.push(`RCD ${r.sym}: ${evRcd(r).t}.`); });
