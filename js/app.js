@@ -1,4 +1,4 @@
-const APP_VERSION='1.1.0';
+const APP_VERSION='1.1.1';
 /* =========================================================
    MAKIETA – aplikacja do protokołów z pomiarów instalacji
    Dane trzymane lokalnie w przeglądarce (bez serwera).
@@ -95,9 +95,9 @@ function idb(){
 }
 function idbGet(key){ return idb().then(db=>new Promise((res,rej)=>{ const t=db.transaction(DB_STORE,'readonly').objectStore(DB_STORE).get(key); t.onsuccess=()=>res(t.result); t.onerror=()=>rej(t.error); })); }
 function idbPut(key,val){ return idb().then(db=>new Promise((res,rej)=>{ const tx=db.transaction(DB_STORE,'readwrite'); tx.objectStore(DB_STORE).put(val,key); tx.oncomplete=()=>res(); tx.onerror=()=>rej(tx.error); tx.onabort=()=>rej(tx.error); })); }
-function save(){ clearTimeout(_saveTimer); _saveTimer=setTimeout(saveNow,250); }
+function save(){ if(!_saveTimer) _saveTimer=setTimeout(saveNow,200); } // zapis najpóźniej 0,2 s po zmianie (nie przesuwa się przy ciągłym wpisywaniu)
 async function saveNow(){
-  clearTimeout(_saveTimer);
+  clearTimeout(_saveTimer); _saveTimer=null;
   try{ await idbPut('state', JSON.parse(JSON.stringify(S))); _saveErrShown=false; }
   catch(e){ if(!_saveErrShown){ _saveErrShown=true; toast('Nie udało się zapisać danych w telefonie: '+(e&&e.message||e)); } }
 }
@@ -415,7 +415,7 @@ function protActions(id){
   modal(`<h3>${esc(p.adres||'(bez adresu)')}</h3><p class="small muted" style="margin-top:0">Protokół ${esc(p.nr||'–')} · ${esc(p.data||'')}</p>
    <button class="btn block" style="margin-bottom:8px" onclick="closeModal();openProt('${id}')">Otwórz</button>
    <button class="btn block" style="margin-bottom:8px" onclick="closeModal();copyProt('${id}')">Kopiuj jako nowy (te same obwody, bez wyników)</button>
-   <button class="btn danger block" style="margin-bottom:8px" onclick="closeModal();confirmBox('Usunąć protokół „${esc(p.nr||'')}” wraz ze zdjęciami?','delProt(\'${id}\')')">Usuń protokół</button>
+   <button class="btn danger block" style="margin-bottom:8px" onclick="askDelProt('${id}')">Usuń protokół</button>
    <button class="btn ghost block" onclick="closeModal()">Anuluj</button>`);
 }
 function copyProt(id){
@@ -427,6 +427,7 @@ function copyProt(id){
   c.uz.forEach(u=>u.r=''); (c.wyr||[]).forEach(w=>w.r='');
   S.protocols.push(c); S.cur=c.id; save(); view={name:'wizard'}; render(); toast('Utworzono kopię protokołu');
 }
+function askDelProt(id){ const p=S.protocols.find(x=>x.id===id); closeModal(); confirmBox('Usunąć protokół '+(p&&p.nr?p.nr+' ':'')+'wraz ze zdjęciami? Tej operacji nie można cofnąć.',`delProt('${id}')`); }
 function delProt(id){ S.protocols=S.protocols.filter(p=>p.id!==id); if(S.cur===id) S.cur=null; save(); render(); toast('Usunięto protokół'); }
 function createProt(){ const p=newProtocol(); S.protocols.push(p); S.cur=p.id; save(); view={name:'wizard'}; render(); }
 function createSample(){ const p=sampleProtocol(); S.protocols.push(p); S.cur=p.id; save(); view={name:'wizard'}; render(); }
