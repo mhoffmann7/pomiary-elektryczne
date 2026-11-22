@@ -201,7 +201,8 @@ const STEPS = [
 let S = load() || {protocols:[], cur:null};
 if(!S.wykonawcy || !S.wykonawcy.length){ S.wykonawcy=[Object.assign({id:'w1', firma:'', wzorc:''}, WYKONAWCA)]; S.wykDomyslny='w1'; }
 function wykDef(){ return S.wykonawcy.find(w=>w.id===S.wykDomyslny) || S.wykonawcy[0] || {osoba:'',nip:'',upr:'',miernik:''}; }
-function wykSnap(w){ return {id:w.id, osoba:w.osoba, firma:w.firma||'', nip:w.nip, upr:w.upr, miernik:w.miernik, wzorc:w.wzorc||''}; }
+function wykSnap(w){ return {id:w.id, osoba:w.osoba, firma:w.firma||'', nip:w.nip, upr:w.upr, miernik:w.miernik, wzorc:w.wzorc||'', izoMax:w.izoMax||'>999'}; }
+function izoMax(p){ return (p&&W(p).izoMax)||'>999'; }
 function W(p){ if(!p.wyk) p.wyk=wykSnap(wykDef()); return p.wyk; }
 let view = {name:'home'};
 function uid(){ return Math.random().toString(36).slice(2,9); }
@@ -303,16 +304,16 @@ function rcdCritText(r){
   return `Typ ${r.typ}, ${CHAR_T[c.ch]}, test prądem ${WAVE_TI[c.wave]}: t(1×IΔn) ${rng(c.t1)}`+(c.x5?`, t(5×IΔn) ${rng(c.t5)}`:', 5×IΔn – niedostępne')+
     (c.ia?`, Ia ${fmt(c.ia[0]*c.idn,1)}–${fmt(c.ia[1]*c.idn,1)} mA (${fmt(c.ia[0])}–${fmt(c.ia[1],1)} IΔn)`:', Ia – nie mierzy się (RCD selektywny)')+`, Uc ≤ ${c.ucLim} V`;
 }
-function rcdFields(r){ const c=rcdCrit(r); return ['t1a','t1b'].concat(c.x5?['t5a','t5b']:[]).concat(c.S?[]:['ia']).concat(['uc']); }
+function rcdFields(r){ const c=rcdCrit(r); return ['t1a','t1b'].concat(c.x5?['t5a','t5b']:[]).concat(c.S?[]:['ia','iab']).concat(['uc']); }
 function evRcd(r){
   const c=rcdCrit(r); const f=rcdFields(r);
-  if(!['t1a','t1b','t5a','t5b','ia','uc'].some(k=>filled(r[k])) && !r.test && !r.half) return {s:'none',t:'brak'};
+  if(!['t1a','t1b','t5a','t5b','ia','iab','uc'].some(k=>filled(r[k])) && !r.test && !r.half) return {s:'none',t:'brak'};
   const errs=[];
   if(r.wave && !(WAVE_OK[r.typ]||[]).includes(r.wave)) errs.push('przebieg testu nieodpowiedni dla typu '+r.typ);
   const tchk=(k,lim,l)=>{ if(!filled(r[k])) return; const t=num(r[k]); if(t>lim[1]) errs.push(`${l} > ${lim[1]} ms`); else if(lim[0] && t<lim[0]) errs.push(`${l} < ${lim[0]} ms`); };
   tchk('t1a',c.t1,'t(1×IΔn)'); tchk('t1b',c.t1,'t(1×IΔn)');
   if(c.x5){ tchk('t5a',c.t5,'t(5×IΔn)'); tchk('t5b',c.t5,'t(5×IΔn)'); }
-  if(c.ia && filled(r.ia)){ const lo=c.ia[0]*c.idn, hi=c.ia[1]*c.idn, v=num(r.ia); if(v<lo||v>hi) errs.push(`Ia poza ${fmt(lo,1)}–${fmt(hi,1)} mA`); }
+  if(c.ia){ const lo=c.ia[0]*c.idn, hi=c.ia[1]*c.idn; ['ia','iab'].forEach(k=>{ if(filled(r[k])){ const v=num(r[k]); if(v<lo||v>hi) errs.push(`Ia poza ${fmt(lo,1)}–${fmt(hi,1)} mA`); } }); }
   if(filled(r.uc) && num(r.uc)>c.ucLim) errs.push(`Uc > ${c.ucLim} V`);
   if(r.half==='nie') errs.push('zadziałał przy ½ IΔn');
   if(r.test==='nie') errs.push('przycisk TEST nie działa');
@@ -387,7 +388,7 @@ function sampleProtocol(){
   Object.assign(p,{nr:'7/11/2026', adres:'Domek 1B, ul. Rumiankowa (przykład)', uzytkownik:'Jan Kowalski', uklad:'TN-C-S', rodzaj:'Odbiorcze (powykonawcze)', pogoda:'Pochmurna', step:'izo'});
   const r1=uid(), r2=uid();
   p.rcd=[
-    {id:r1, sym:'Q1', typ:'A', char:'G', In:'40', idn:'30', t1a:'19', t1b:'21', t5a:'12', t5b:'14', ia:'21', uc:'1,2', half:'tak', test:'tak'},
+    {id:r1, sym:'Q1', typ:'A', char:'G', In:'40', idn:'30', t1a:'19', t1b:'21', t5a:'12', t5b:'14', ia:'21', iab:'22', uc:'1,2', half:'tak', test:'tak'},
     {id:r2, sym:'Q2', typ:'A', In:'25', idn:'30'}
   ];
   const mk=(sym,nazwa,typ,ch,In,rcd,extra)=>Object.assign({id:uid(), rozdz:'RD Domek 1B', sym, nazwa, typ, zab:{char:ch,In:String(In)}, rcd, izo:{}, cig:'', zs:'', photos:[], opis:''},extra||{});
@@ -491,7 +492,8 @@ function renderWykForm(){
    ${f('nip','NIP')}
    <label class="f"><span>Nr uprawnień</span><textarea oninput="setWyk('${w.id}','upr',this.value)" placeholder="np. Eksploatacja E1/…, Dozór D1/…">${esc(w.upr||'')}</textarea></label>
    ${f('miernik','Przyrząd pomiarowy (model i nr seryjny)','np. Metrel MI 3125 SN…')}
-   ${f('wzorc','Świadectwo wzorcowania ważne do (opcjonalnie)','','date')}</div>
+   ${f('wzorc','Świadectwo wzorcowania ważne do (opcjonalnie)','','date')}
+   ${f('izoMax','Wynik izolacji „poza zakresem” – tak jak pokazuje miernik','np. >999 lub >199,9')}</div>
    ${isDef?'<div class="info">To jest domyślny wykonawca dla nowych protokołów.</div>':`<button class="btn block" onclick="S.wykDomyslny='${w.id}';save();render()">Ustaw jako domyślnego</button><div style="height:8px"></div>`}
    <div class="btns"><button class="btn danger grow" onclick="delWyk('${w.id}')">Usuń</button><button class="btn pri grow" onclick="view={name:'wyklist',back:'${view.back}'};render()">Gotowe</button></div></main>`;
 }
@@ -653,7 +655,7 @@ function renderRcdForm(p){
    <label class="f"><span>Dopuszczalne napięcie dotykowe U<sub>L</sub></span><div class="seg"><button class="${c.ucLim===50?'on':''}" onclick="setRcd('${r.id}','ucLim','50');render()">50 V</button><button class="${c.ucLim===25?'on':''}" onclick="setRcd('${r.id}','ucLim','25');render()">25 V</button></div></label>
    <p class="small muted" style="margin:-4px 0 0">25 V tylko tam, gdzie wymaga tego część 7 normy (np. pomieszczenia dla zwierząt hodowlanych).</p></div>
    <div class="info"><b>Kryteria dla tego wyłącznika:</b><br>${esc(rcdCritText(r))}.
-   ${c.wave!=='sin'?`<br>Miernik sam zwiększa prąd testu ×${fmt(c.mult,1)} (przy 1×IΔn podaje ${fmt(c.mult*c.idn,0)} mA) – wpisujesz czasy tak, jak pokazuje ekran.`:''}
+   ${c.wave!=='sin'?'<br>Miernik sam dobiera prąd testu do typu wyłącznika – wpisujesz wyniki tak, jak pokazuje ekran.':''}
    ${c.S?'<br>MI 3125 przed pomiarem czasu odczekuje 30 s i pomija pomiar Ia.':''}</div>
    <p class="small muted">Przypisz obwody do tego RCD w edycji obwodu.</p>
    <div class="btns"><button class="btn danger grow" onclick="delRcd('${r.id}')">Usuń RCD</button><button class="btn pri grow" onclick="backToWizard()">Gotowe</button></div></main>`;
@@ -728,20 +730,22 @@ function vIzo(p){
      <label class="f" style="margin-bottom:8px"><span>Napięcie probiercze</span><select onchange="setOb('${o.id}','izoU',this.value);render()"><option value="" ${!o.izoU?'selected':''}>jak w protokole (${izoU({},p).t}, ≥ ${fmt(izoU({},p).min,izoU({},p).min<1?1:0)} MΩ)</option>${Object.entries(IZO_U).map(([k,c])=>`<option value="${k}" ${o.izoU===k?'selected':''}>${c.t} – ${c.d} (≥ ${fmt(c.min,c.min<1?1:0)} MΩ)</option>`).join('')}</select></label>
      <div class="seg" style="margin-bottom:8px"><button class="${!zw?'on':''}" onclick="setIzoMet('${o.id}','pary')">Każda para (${TYPY[o.typ].pairs.length})</button><button class="${zw?'on':''}" onclick="setIzoMet('${o.id}','zw')">${IZO_ZW[o.typ]}</button></div>
      <div class="meas${zw?' c2':''}">${pairs.map(k=>`<div class="cell"><label>${k} [MΩ]</label><input class="num" inputmode="decimal" value="${esc((o.izo||{})[k]||'')}" aria-label="${o.sym} ${k}" oninput="setOb('${o.id}','izo.${k}',this.value,'izo')"></div>`).join('')}</div>
-     <div class="btns" style="margin-top:8px"><button class="btn sm" onclick="izoAllMax('${o.id}')">Wszystkie „poza zakresem” (&gt;999)</button><button class="btn sm ghost" onclick="ocr('${o.id}','izo','MΩ')">${ico('cam')} Ze zdjęcia</button></div></div>`;
+     <div class="btns" style="margin-top:8px"><button class="btn sm" onclick="izoAllMax('${o.id}')">Wszystkie „poza zakresem” (${esc(izoMax(p))})</button><button class="btn sm ghost" onclick="ocr('${o.id}','izo','MΩ')">${ico('cam')} Ze zdjęcia</button></div></div>`;
   }).join('');
   return `<h2>Rezystancja izolacji</h2><p class="lead">Najpierw WLZ (kabel zasilający), potem obwody.</p>
    <div class="card"><div class="small" style="margin-bottom:6px">Napięcie probiercze – domyślne dla protokołu</div>
    <div class="seg">${['250','500','1000'].map(k=>`<button class="${(p.izoU||'500')===k?'on':''}" onclick="setP('izoU','${k}');render()">${IZO_U[k].u} V</button>`).join('')}</div>
    <p class="small muted" style="margin:8px 0 0">${esc(izoU({},p).d)}; wymagane ≥ ${fmt(izoU({},p).min,0)} MΩ. Dla pojedynczego obwodu możesz ustawić inne napięcie (np. 250 V przy gniazdach z ogranicznikiem przepięć albo obwód SELV/PELV ≥ 0,5 MΩ).</p></div>
-   <div class="info">Wg PN-HD 60364-6 (tab. 6.1, pkt 6.4.3.3): 500 V → ≥ 1 MΩ; 250 V obniżone ze względu na SPD → nadal ≥ 1 MΩ; SELV/PELV 250 V → ≥ 0,5 MΩ; obwody &gt; 500 V: 1000 V → ≥ 1 MΩ. Wpisz „&gt;999”, gdy wynik jest poza zakresem miernika.</div>
+   <div class="info">Wg PN-HD 60364-6 (tab. 6.1, pkt 6.4.3.3): 500 V → ≥ 1 MΩ; 250 V obniżone ze względu na SPD → nadal ≥ 1 MΩ; SELV/PELV 250 V → ≥ 0,5 MΩ; obwody &gt; 500 V: 1000 V → ≥ 1 MΩ. </div>
+   <div class="card row"><span class="grow small">Wynik „poza zakresem” Twojego miernika<br><span class="muted">wpisywany przyciskiem przy obwodzie; ustawienie z danych przyrządu</span></span>
+   <input type="text" style="width:110px" value="${esc(izoMax(p))}" aria-label="Wynik poza zakresem" onchange="W(P()).izoMax=this.value.trim()||'>999';save();render()"></div>
    <div class="card"><div class="small" style="margin-bottom:6px">Metoda dla wszystkich obwodów naraz</div>
    <div class="btns"><button class="btn sm grow" onclick="setIzoMetAll('pary')">Każda para</button><button class="btn sm grow" onclick="setIzoMetAll('zw')">Przewody czynne zwarte – PE</button></div>
    <p class="small muted" style="margin:8px 0 0">Pomiar między zwartymi przewodami czynnymi (L+N) a PE – np. przy pomiarach okresowych, gdy nie można odłączyć odbiorników (PN-HD 60364-6, 6.4.3.3).${p.rodzaj&&p.rodzaj!=='Okresowe'?' <b>Ten protokół nie jest okresowy</b> – przy odbiorczych mierzy się zwykle każdą parę.':''}</p></div>${rows}`;
 }
 function setIzoMet(id,m){ obById(id).izoMet=m; save(); render(); }
 function setIzoMetAll(m){ P().obwody.forEach(o=>o.izoMet=m); save(); render(); toast(m==='zw'?'Wszystkie obwody: przewody czynne zwarte – PE':'Wszystkie obwody: każda para osobno'); }
-function izoAllMax(id){ const o=obById(id); izoPairs(o).forEach(k=>{ o.izo=o.izo||{}; o.izo[k]='>999'; }); save(); render(); }
+function izoAllMax(id){ const o=obById(id); const mx=izoMax(P()); izoPairs(o).forEach(k=>{ o.izo=o.izo||{}; o.izo[k]=mx; }); save(); render(); }
 
 /* ---------------- krok: pętla zwarcia ---------------- */
 function vZs(p){
@@ -763,14 +767,14 @@ function vRcd(p){
   const rows=p.rcd.map(r=>{ const c=rcdCrit(r);
     const inp=(k,l)=>`<div class="cell"><label>${l}</label>${measInput(r[k],`setRcd('${r.id}','${k}',this.value)`,r.sym+' '+l,`ocrRcd('${r.id}','${k}')`)}</div>`;
     const seg=(k,l)=>`<div class="cell"><label>${l}</label><div class="seg"><button class="${r[k]==='tak'?'on-tak':''}" onclick="setRcd('${r.id}','${k}','tak');render()">${k==='half'?'Brak':'Tak'}</button><button class="${r[k]==='nie'?'on-nie':''}" onclick="setRcd('${r.id}','${k}','nie');render()">${k==='half'?'Zadziałał':'Nie'}</button></div></div>`;
-    const tl=(m)=>` (${fmt(c.mult*m*c.idn,0)} mA)`;
     return `<div class="card"><div class="row" style="margin-bottom:8px"><span class="sym">${esc(r.sym)}</span><span class="grow">Typ ${esc(r.typ)}${c.ch!=='G'?' '+esc(c.ch):''} · ${esc(r.In)} A · IΔn ${esc(r.idn)} mA<span class="small muted" style="display:block">obwody: ${p.obwody.filter(o=>o.rcd===r.id).map(o=>o.sym).join(', ')||'–'}</span></span><span id="ev-rcd-${r.id}">${badge(evRcd(r))}</span></div>
       <div class="small muted" style="margin-bottom:8px">${esc(rcdCritText(r))}. <button class="btn ghost sm" style="min-height:28px;padding:0 4px" onclick="editRcd('${r.id}')">Zmień</button></div>
-      <div class="meas c2">${inp('t1a','t 1×IΔn 0° [ms]'+(c.mult!==1?tl(1):''))}${inp('t1b','t 1×IΔn 180° [ms]')}
-      ${c.x5?inp('t5a','t 5×IΔn 0° [ms]'+(c.mult!==1?tl(5):''))+inp('t5b','t 5×IΔn 180° [ms]'):''}
-      ${c.S?'':inp('ia','Ia [mA]')}${inp('uc','Uc [V]')}</div>
+      <div class="meas c2">${inp('t1a','t 1×IΔn 0° [ms]')}${inp('t1b','t 1×IΔn 180° [ms]')}
+      ${c.x5?inp('t5a','t 5×IΔn 0° [ms]')+inp('t5b','t 5×IΔn 180° [ms]'):''}
+      ${inp('uc','Uc [V]')}</div>
+      ${c.S?'<p class="small muted">Prąd zadziałania (narastający prąd) – nie mierzy się dla RCD selektywnych.</p>':`<div class="small" style="font-weight:600;margin:10px 0 4px">Prąd zadziałania – test narastającym prądem</div><div class="meas c2">${inp('ia','Ia 0° [mA]')}${inp('iab','Ia 180° [mA]')}</div>`}
       ${c.x5?'':'<p class="small muted">Test 5×IΔn niedostępny w MI 3125 dla tego typu i prądu – nie jest wymagany w ocenie.</p>'}
-      <div class="meas c2" style="margin-top:8px">${seg('half','½ IΔn ('+fmt(c.half*c.idn,1)+' mA)')}${seg('test','Przycisk TEST')}</div></div>`; }).join('');
+      <div class="meas c2" style="margin-top:8px">${seg('half','½ IΔn')}${seg('test','Przycisk TEST')}</div></div>`; }).join('');
   return `<h2>Wyłączniki różnicowoprądowe RCD</h2><p class="lead">Wyniki autotestu MI 3125. Kryteria dobierają się do typu, charakterystyki i przebiegu prądu testu każdego wyłącznika.</p>
    <details class="card"><summary style="cursor:pointer;font-weight:600;min-height:28px">Zestawienie kryteriów (PN-EN 61008/61009, PN-EN 62423)</summary>
    <table style="width:100%;border-collapse:collapse;font-size:13px;margin-top:8px">
@@ -904,7 +908,7 @@ function protocolHtml(p){
   h+=sec('Badanie rezystancji izolacji kabla zasilającego')+`<p>Napięcie probiercze DC wg kolumny U. Wartość dopuszczalna wg PN-HD 60364-6:2016 (tab. 6.1): ≥ 1 MΩ; dla obwodów SELV/PELV (250 V) ≥ 0,5 MΩ. Pomiar napięciem obniżonym do 250 V ze względu na ograniczniki przepięć – wymagane ≥ 1 MΩ (pkt 6.4.3.3). Wartości w [MΩ].</p>`+(wlz.length?t3(wlz):'<p>Nie dotyczy.</p>');
   h+=sec('Badanie rezystancji izolacji obwodów')+`<p>Obwody jednofazowe [MΩ]:</p><table><tr><th>Lp.</th><th>Symbol</th><th>Nazwa</th><th>U [V]</th><th>L-PE</th><th>L-N</th><th>N-PE</th><th>Ocena</th></tr>${ob1.map((o,i)=>`<tr><td>${i+1}</td><td>${esc(o.sym)}</td><td>${esc(o.nazwa)}</td><td>${izoU(o,p).u}</td>${o.izoMet==='zw'?`<td colspan="3">L+N–PE: ${v((o.izo||{})['L+N–PE'])}</td>`:['L-PE','L-N','N-PE'].map(k=>`<td>${v((o.izo||{})[k])}</td>`).join('')}<td>${ev(evIzo(o))}</td></tr>`).join('')}</table>${p.obwody.some(o=>o.izoMet==='zw')?'<p style="font-size:9pt">L+N–PE – pomiar między zwartymi przewodami czynnymi a przewodem ochronnym (PN-HD 60364-6, pkt 6.4.3.3).</p>':''}`+(ob3.length?`<p>Obwody trójfazowe [MΩ]:</p>`+t3(ob3):'');
   h+=sec('Badanie impedancji pętli zwarcia')+`<p>U₀ = 230 V; Za = U₀/Ia.</p><table><tr><th>Lp.</th><th>Symbol</th><th>Nazwa</th><th>Typ</th><th>In [A]</th><th>Ia [A]</th><th>Zs [Ω]</th><th>Za [Ω]</th><th>Ik [A]</th><th>Ocena</th></tr>${p.obwody.map((o,i)=>{const ia=iaFor(o); const z=num(o.zs); return `<tr><td>${i+1}</td><td>${esc(o.sym)}</td><td>${esc(o.nazwa)}</td><td>${esc((o.zab||{}).char)}</td><td>${esc((o.zab||{}).In)}</td><td>${ia?fmt(ia,0):'–'}</td><td>${v(o.zs)}</td><td>${ia?fmt(U0/ia):'–'}</td><td>${z?fmt(U0/z,0):'–'}</td><td>${ev(evZs(o))}</td></tr>`;}).join('')}</table>`;
-  h+=sec('Badanie wyłączników różnicowoprądowych RCD')+`<table><tr><th>Lp.</th><th>Symbol</th><th>Typ / charakt.</th><th>In [A]</th><th>IΔn [mA]</th><th>t 1×IΔn 0°/180° [ms]</th><th>t 5×IΔn 0°/180° [ms]</th><th>Ia [mA]</th><th>Uc [V]</th><th>TEST</th><th>Ocena</th></tr>${p.rcd.map((r,i)=>`<tr><td>${i+1}</td><td>${esc(r.sym)}</td><td>${esc(r.typ)}${(r.char&&r.char!=='G')?' '+esc(r.char):''}</td><td>${esc(r.In)}</td><td>${esc(r.idn)}</td><td>${v(r.t1a)} / ${v(r.t1b)}</td><td>${v(r.t5a)} / ${v(r.t5b)}</td><td>${v(r.ia)}</td><td>${v(r.uc)}</td><td>${r.test==='tak'?'działa':r.test==='nie'?'<span class="neg">nie działa</span>':'–'}</td><td>${ev(evRcd(r))}</td></tr>`).join('')}</table>${p.rcd.length?`<p style="font-size:9pt">Kryteria oceny (PN-EN 61008-1, PN-EN 61009-1, PN-EN 62423):<br>${p.rcd.map(r=>esc(r.sym)+' – '+esc(rcdCritText(r))+'.').join('<br>')}</p>`:''}`;
+  h+=sec('Badanie wyłączników różnicowoprądowych RCD')+`<table><tr><th>Lp.</th><th>Symbol</th><th>Typ / charakt.</th><th>In [A]</th><th>IΔn [mA]</th><th>t 1×IΔn 0°/180° [ms]</th><th>t 5×IΔn 0°/180° [ms]</th><th>Ia 0°/180° [mA]</th><th>Uc [V]</th><th>TEST</th><th>Ocena</th></tr>${p.rcd.map((r,i)=>`<tr><td>${i+1}</td><td>${esc(r.sym)}</td><td>${esc(r.typ)}${(r.char&&r.char!=='G')?' '+esc(r.char):''}</td><td>${esc(r.In)}</td><td>${esc(r.idn)}</td><td>${v(r.t1a)} / ${v(r.t1b)}</td><td>${v(r.t5a)} / ${v(r.t5b)}</td><td>${v(r.ia)} / ${v(r.iab)}</td><td>${v(r.uc)}</td><td>${r.test==='tak'?'działa':r.test==='nie'?'<span class="neg">nie działa</span>':'–'}</td><td>${ev(evRcd(r))}</td></tr>`).join('')}</table>${p.rcd.length?`<p style="font-size:9pt">Kryteria oceny (PN-EN 61008-1, PN-EN 61009-1, PN-EN 62423):<br>${p.rcd.map(r=>esc(r.sym)+' – '+esc(rcdCritText(r))+'.').join('<br>')}</p>`:''}`;
   h+=sec('Badanie rezystancji uziemienia')+(p.uzNd||!p.uz.length?'<p>Nie dotyczy.</p>':`<table><tr><th>Lp.</th><th>Symbol</th><th>Metoda</th><th>R [Ω]</th><th>R wym. [Ω]</th><th>Ocena</th></tr>${p.uz.map((u,i)=>`<tr><td>${i+1}</td><td>${esc(u.sym)}</td><td>${esc(u.met)}</td><td>${v(u.r)}</td><td>${v(u.lim)}</td><td>${ev(evUz(u))}</td></tr>`).join('')}</table>`);
   const grz=p.obwody.filter(o=>o.typ==='ogrz');
   if(grz.length){ h+=sec('Karta pomiarów przewodów grzejnych');
@@ -946,7 +950,7 @@ function addPhotoGrz(id){ pickPhoto(d=>{ const o=obById(id); const opis=o.sym+' 
 
 /* ---------------- odczyt ze zdjęcia ekranu (DEMO) ---------------- */
 function fakeValue(unit){
-  if(unit==='MΩ') return Math.random()<0.6?'>999':String(Math.round(200+Math.random()*700));
+  if(unit==='MΩ') return Math.random()<0.6?izoMax(P()):String(Math.round(200+Math.random()*700));
   if(unit==='Ω') return (0.03+Math.random()*0.9).toFixed(2).replace('.',',');
   return String(Math.round(10+Math.random()*20));
 }
@@ -974,7 +978,7 @@ function ocr(id,path,unit){
     setOb(id,path,v); render();
   });
 }
-function ocrRcd(id,k){ ocrDialog(k==='uc'?'V':k==='ia'?'mA':'ms', v=>{ setRcd(id,k,v); render(); }); }
+function ocrRcd(id,k){ ocrDialog(k==='uc'?'V':(k==='ia'||k==='iab')?'mA':'ms', v=>{ setRcd(id,k,v); render(); }); }
 function ocrUz(id){ ocrDialog('Ω', v=>{ setUz(id,'r',v); render(); }); }
 
 /* ---------------- modal / toast ---------------- */
